@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Curtain 이미지 관리</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8; --surface: #fff; --text: #1b1f24; --muted: #6a737d;
+    --border: #d9dde3; --accent: #2563eb; --accent-text: #fff;
+    --danger: #dc2626; --sel: #e8f0fe; --ok: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --surface: #1a1f26; --text: #e6e9ee; --muted: #98a1ad;
+      --border: #2d343e; --accent: #4f8bff; --accent-text: #0b0f14;
+      --danger: #f05252; --sel: #223049; --ok: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Noto Sans KR", sans-serif; display: flex; flex-direction: column; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; align-items: baseline; gap: 12px; }
+  header h1 { margin: 0; font-size: 17px; }
+  header span { color: var(--muted); font-size: 13px; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 340px 1fr; }
+  #list { overflow-y: auto; border-right: 1px solid var(--border); background: var(--surface); }
+  #detail { overflow-y: auto; padding: 20px; }
+  .item { display: block; width: 100%; text-align: left; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: inherit; cursor: pointer; font: inherit; }
+  .item:hover { background: var(--sel); }
+  .item.sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .item .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .m { color: var(--muted); font-size: 12px; }
+  .state { padding: 40px 20px; text-align: center; color: var(--muted); }
+  button.btn { font: inherit; padding: 8px 18px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 10px; margin-bottom: 18px; }
+  h2 { margin: 0 0 6px; font-size: 20px; word-break: break-word; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .body { white-space: pre-wrap; word-break: break-word; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+  .imgbox { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; min-height: 80px; }
+  .imgbox img { max-width: 100%; max-height: 70vh; object-fit: contain; }
+  .imgbox .note { color: var(--muted); padding: 24px 0; }
+  .label { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; max-width: calc(100vw - 32px); }
+  .toast { background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  .toast.err { background: var(--danger); color: #fff; }
+  #back { display: none; }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; }
+    #list { border-right: 0; }
+    main.show-detail #list { display: none; }
+    main:not(.show-detail) #detail { display: none; }
+    #back { display: inline-block; margin-bottom: 12px; }
+  }
+</style>
+</head>
+<body>
+<header><h1>Curtain 이미지 관리</h1><span id="count"></span></header>
+<main id="main">
+  <section id="list"></section>
+  <section id="detail"><div class="state">목록에서 항목을 선택하세요</div></section>
+</main>
+<div id="toasts"></div>
+
+<script>
+const API = 'https://port-0-powerful-spring-boot-5o1j2llh1wq9rp.sel4.cloudtype.app';
+let items = [];          // Expired[]: { blindN, board, resourceUrl }
+let selectedN = null;
+let busy = false;
+
+const $list = document.getElementById('list');
+const $detail = document.getElementById('detail');
+const $main = document.getElementById('main');
+const $count = document.getElementById('count');
+
+function toast(msg, isErr) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (isErr ? ' err' : '');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function stateBox(msg, withRetry) {
+  const box = el('div', 'state');
+  box.appendChild(el('p', null, msg));
+  if (withRetry) {
+    const b = el('button', 'btn primary', '재조회');
+    b.onclick = load;
+    box.appendChild(b);
+  }
+  return box;
+}
+
+function renderList() {
+  $list.replaceChildren();
+  $count.textContent = items.length ? `${items.length}건 대기` : '';
+  if (!items.length) {
+    $list.appendChild(stateBox('처리할 항목이 없습니다.', true));
+    return;
+  }
+  for (const it of items) {
+    const b = el('button', 'item' + (it.blindN === selectedN ? ' sel' : ''));
+    b.appendChild(el('div', 't', (it.board && it.board.t) || '(제목 없음)'));
+    b.appendChild(el('div', 'm', `#${it.blindN} · ${(it.board && it.board.d) || ''}`));
+    b.onclick = () => select(it.blindN);
+    $list.appendChild(b);
+  }
+}
+
+function select(n) {
+  selectedN = n;
+  $main.classList.add('show-detail');
+  renderList();
+  renderDetail();
+}
+
+function renderDetail() {
+  $detail.replaceChildren();
+  const it = items.find(x => x.blindN === selectedN);
+  if (!it) {
+    $main.classList.remove('show-detail');
+    $detail.appendChild(el('div', 'state', '목록에서 항목을 선택하세요'));
+    return;
+  }
+  const bd = it.board || {};
+
+  const back = el('button', 'btn', '← 목록');
+  back.id = 'back';
+  back.onclick = () => { $main.classList.remove('show-detail'); };
+  $detail.appendChild(back);
+
+  const actions = el('div', 'actions');
+  const fix = el('button', 'btn primary', '수리');
+  const del = el('button', 'btn danger', '폐기');
+  fix.onclick = () => act('PUT', `/api/curtain/fix/img/${it.blindN}`, '수리', it.blindN, [fix, del]);
+  del.onclick = () => act('DELETE', `/api/curtain/discard-expired/${it.blindN}`, '폐기', it.blindN, [fix, del]);
+  actions.append(fix, del);
+  $detail.appendChild(actions);
+
+  $detail.appendChild(el('h2', null, bd.t || '(제목 없음)'));
+  const meta = el('div', 'meta');
+  for (const [k, v] of [['작성자', bd.nn], ['날짜', bd.d], ['카테고리', bd.cn], ['회원 등급', bd.cp], ['blindN', it.blindN]]) {
+    const s = el('span');
+    s.append(k + ' ');
+    s.appendChild(el('b', null, v == null || v === '' ? '-' : String(v)));
+    meta.appendChild(s);
+  }
+  $detail.appendChild(meta);
+
+  $detail.appendChild(el('div', 'body', bd.b || ''));
+
+  $detail.appendChild(el('p', 'label', '대상 이미지'));
+  const box = el('div', 'imgbox');
+  if (it.resourceUrl) {
+    const img = new Image();
+    img.alt = '대상 이미지';
+    box.appendChild(el('div', 'note', '이미지 불러오는 중…'));
+    img.onload = () => box.replaceChildren(img);
+    img.onerror = () => box.replaceChildren(el('div', 'note', '이미지를 불러오지 못했습니다. (수리 대상일 수 있습니다)'));
+    img.src = it.resourceUrl;
+  } else {
+    box.appendChild(el('div', 'note', 'resourceUrl 없음'));
+  }
+  $detail.appendChild(box);
+}
+
+async function act(method, path, label, n, btns) {
+  if (busy) return;
+  busy = true;
+  btns.forEach(b => b.disabled = true);
+  try {
+    const opt = { method };
+    if (method === 'PUT') opt.headers = { 'Content-Type': 'application/json' };
+    const res = await fetch(API + path, opt);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    items = items.filter(x => x.blindN !== n);
+    if (selectedN === n) selectedN = null;
+    toast(`#${n} ${label} 완료`);
+    renderList();
+    renderDetail();
+  } catch (e) {
+    toast(`#${n} ${label} 실패: ${e.message}`, true);
+    btns.forEach(b => b.disabled = false);
+  } finally {
+    busy = false;
+  }
+}
+
+async function load() {
+  $list.replaceChildren(stateBox('목록 불러오는 중… (오래 걸릴 수 있습니다)'));
+  $count.textContent = '';
+  try {
+    const res = await fetch(API + '/api/curtain/latest/img');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    items = await res.json();
+    selectedN = null;
+    renderList();
+    renderDetail();
+  } catch (e) {
+    $list.replaceChildren(stateBox('목록 조회 실패: ' + e.message, true));
+  }
+}
+
+load();
+</script>
+</body>
+</html>
