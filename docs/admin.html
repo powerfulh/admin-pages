@@ -98,9 +98,15 @@ function stateBox(msg, withRetry) {
   const box = el('div', 'state');
   box.appendChild(el('p', null, msg));
   if (withRetry) {
-    const b = el('button', 'btn primary', '재조회');
-    b.onclick = load;
-    box.appendChild(b);
+    const row = el('div', 'actions');
+    row.style.justifyContent = 'center';
+    row.style.marginBottom = '0';
+    const b1 = el('button', 'btn primary', '새로고침 재조회 (refresh=true)');
+    b1.onclick = () => load(true);
+    const b2 = el('button', 'btn', '재조회 (refresh=false)');
+    b2.onclick = () => load(false);
+    row.append(b1, b2);
+    box.appendChild(row);
   }
   return box;
 }
@@ -200,11 +206,11 @@ async function act(method, path, label, n, btns) {
   }
 }
 
-async function load() {
+async function load(refresh) {
   $list.replaceChildren(stateBox('목록 불러오는 중… (오래 걸릴 수 있습니다)'));
   $count.textContent = '';
   try {
-    const res = await fetch(API + '/api/curtain/latest/img');
+    const res = await fetch(API + '/api/curtain/latest/img?refresh=' + (refresh === true));
     if (!res.ok) throw new Error('HTTP ' + res.status);
     items = await res.json();
     selectedN = null;
@@ -215,7 +221,7 @@ async function load() {
   }
 }
 
-load();
+load(false);
 </script>
 </body>
 </html>
